@@ -18,12 +18,12 @@ import base64
 
 
 MAGIC = 0.1156069364
-LABELS = 'capacity_load'
+
 
 DATA_FILE = ''
 SENSOR_COORDINATES_DATA = 'media/sensor_coordinates.csv'
 IGNORE_DATA_BEFORE_ROW = 4871
-
+STRAIN_TO_LOAD_DATA = 'media/strain_load.csv'
 SOURCE_IMAGE_WIDTH = 1000
 SOURCE_IMAGE_HEIGHT = 680
 
@@ -66,6 +66,66 @@ def index_containing_substring(the_list, substring):
               return s
     return -1
 
+def get_sensors_date(DAY):
+    # Load the sensor reading data.
+        df = pd.read_csv(DATA_FILE, header=None)
+        df = df.iloc[IGNORE_DATA_BEFORE_ROW:]
+        df.set_index(pd.to_datetime(df[0], unit='ms'), inplace=True)
+        df.replace(to_replace=0, method='ffill', inplace=True)
+        time_list = list(map(str,list(df.index)))
+        str_index = index_containing_substring(time_list,DAY)
+        PLOT_TIMESTAMP = str_index.split('.')[0]
+        # Load the sensor placement data.
+        df_sensors = pd.read_csv(SENSOR_COORDINATES_DATA)
+        # Limit the data to specific timestamp.
+        df_slice = df[PLOT_TIMESTAMP]
+        df_slice = df_slice.to_dict('split')['data'][0]
+        df_offset = df.head(1)
+        df_offset = df_offset.to_dict('split')['data'][0]
+
+        sensors_data = {}
+        for i in range(1, len(df_slice), 3):
+            sensors_data[str(df_slice[i])] = (df_slice[i+1] - df_offset[i+1]) * MAGIC
+        return sensors_data
+
+def calculate_heatmap(circles,rectangles,LABELS):
+    combined_data = [{'x':d['x'], 'y': d['y'], LABELS: d[LABELS]} for d in chain(circles, rectangles)]
+
+    def f(x, y):
+        for d in combined_data:
+            if abs(d['x']-x) < 80 and abs(d['y']-y) < 80:
+                dist = np.linalg.norm(np.array([x, y]) - np.array([d['x'], d['y']]))
+                if dist < 25:
+                    return d[LABELS]
+        return 0
+
+    heatmap = np.array([[f(x, y) for x in range(SOURCE_IMAGE_WIDTH)] for y in range(SOURCE_IMAGE_HEIGHT)])
+    blurred = gaussian_filter(heatmap, sigma=50, mode='mirror', cval=0)
+
+    return blurred
+
+def produce_image(blurred,LABELS):
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # Create custom colormap.
+    red = Color('#ff6d6a')
+    yellow = Color('#fec359')
+    green = Color('#76c175')
+    blue = Color('#54a0fe')
+    colors = [blue.rgb, green.rgb, yellow.rgb, red.rgb]
+    cmap_name = 'my_list'
+    cm = LinearSegmentedColormap.from_list(cmap_name, colors, N=100)
+    ax.imshow(blurred, interpolation='hamming', cmap=cm)
+    IMAGE_FILE = settings.MEDIA_ROOT+'/' + f'new_heatmap_{LABELS}.png'
+    roof_image = imread(settings.MEDIA_ROOT+'/'+'roof_transparent.png')
+    ax.imshow(roof_image, aspect=1)
+    plt.tight_layout()
+    plt.axis('off')
+    plt.savefig(IMAGE_FILE,progressive=True,bbox_inches='tight')
+    with open(IMAGE_FILE, "rb") as img_file:
+        img_data = base64.b64encode(img_file.read())
+        
+    return img_data
 
 class FileUploadView(APIView):
     parser_class = (FileUploadParser,)
@@ -96,41 +156,13 @@ class FileUploadView(APIView):
           return Response("Failed to Upload", status=status.HTTP_400_BAD_REQUEST)
 
 
-class DrawHeatmapView(APIView):
-      
-      
-      def post(self, request, *args, **kwargs):
-          
-       
-        # Load the sensor reading data.
-        df = pd.read_csv(DATA_FILE, header=None)
-        df = df.iloc[IGNORE_DATA_BEFORE_ROW:]
-        df.set_index(pd.to_datetime(df[0], unit='ms'), inplace=True)
-        df.replace(to_replace=0, method='ffill', inplace=True)
-
-        DAY = request.data['date']
-        time_list = list(map(str,list(df.index)))
-        print(DAY)
-        str_index = index_containing_substring(time_list,DAY)
+class CapacityHeatmapView(APIView):
+    
+    def post(self, request, *args, **kwargs):
         
-        PLOT_TIMESTAMP = str_index.split('.')[0]
-        # Load the sensor placement data.
+        DAY = request.data['date']  
+        sensors_data = get_sensors_date(DAY)
         df_sensors = pd.read_csv(SENSOR_COORDINATES_DATA)
-        
-        
-        #Get the timestamp of a certain day
-      
-        
-        # Limit the data to specific timestamp.
-        df_slice = df[PLOT_TIMESTAMP]
-        df_slice = df_slice.to_dict('split')['data'][0]
-        df_offset = df.head(1)
-        df_offset = df_offset.to_dict('split')['data'][0]
-
-        sensors_data = {}
-        for i in range(1, len(df_slice), 3):
-            sensors_data[str(df_slice[i])] = (df_slice[i+1] - df_offset[i+1]) * MAGIC
-
         circles = []
         rectangles = []
         colors = generate_color_scale()
@@ -165,39 +197,69 @@ class DrawHeatmapView(APIView):
                     'reading': reading,
                     'capacity_load': capacity_percent}
                 rectangles.append(rectangle)
-        # Calculate heatmap.
-        combined_data = [{'x':d['x'], 'y': d['y'], LABELS: d[LABELS]} for d in chain(circles, rectangles)]
+        blurred = calculate_heatmap(circles,rectangles,LABELS="capacity_load")
+        img_data = produce_image(blurred, LABELS="capacity_load")
+        
+        return Response(img_data, status=status.HTTP_201_CREATED)
 
-        def f(x, y):
-            for d in combined_data:
-                if abs(d['x']-x) < 80 and abs(d['y']-y) < 80:
-                    dist = np.linalg.norm(np.array([x, y]) - np.array([d['x'], d['y']]))
-                    if dist < 25:
-                        return d[LABELS]
-            return 0
+class LoadHeatmapView(APIView):
+    
+     def post(self, request, *args, **kwargs):
+        
+        DAY = request.data['date']  
+        sensors_data = get_sensors_date(DAY)
+        df_sensors = pd.read_csv(SENSOR_COORDINATES_DATA)
+        circles = []
+        rectangles = []
+        colors = generate_color_scale()
+        
+        #--Load data
+        df_load = pd.read_csv(STRAIN_TO_LOAD_DATA,header=None)
+        df_load_trans = df_load.T
+        df_load_trans.columns = df_load_trans.iloc[0]
+        df_newload = df_load_trans[1:]
+        weights = pd.to_numeric(df_newload.iloc[:,2],errors='coerce')
+        strains = pd.to_numeric(df_newload.iloc[:,1],errors='coerce')
+        df_newload['load/strain'] = weights/strains
+        
+        #--Merge two dataframes
+        df_merge = pd.merge(left=df_sensors, right=df_newload,left_on='Name', right_on='Sensor')
+        
+        circles = []
+        rectangles = []
+        colors = generate_color_scale()
+        for index, row in df_merge.iterrows():
+            if 'C' in row['Name']:
+                reading = sensors_data[str(row['ID'])]
+                reading = reading * -1 if reading < 0 else reading
+                loading = reading * row['load/strain']
+                color = colors[hardcode_color(row['Name'])]
+              
+                circle = {
+                    'x': row['X'],
+                    'y': row['Y'],
+                    'color': color.rgb,
+                    'size': row['Width'],
+                    'reading': reading,
+                    'loading': loading}
+                circles.append(circle)
 
-        heatmap = np.array([[f(x, y) for x in range(SOURCE_IMAGE_WIDTH)] for y in range(SOURCE_IMAGE_HEIGHT)])
-        blurred = gaussian_filter(heatmap, sigma=50, mode='mirror', cval=0)
-
-        # Setup the plot.
-        fig, ax = plt.subplots(figsize=(10, 10))
-
-        # Create custom colormap.
-        red = Color('#ff6d6a')
-        yellow = Color('#fec359')
-        green = Color('#76c175')
-        blue = Color('#54a0fe')
-        colors = [blue.rgb, green.rgb, yellow.rgb, red.rgb]
-        cmap_name = 'my_list'
-        cm = LinearSegmentedColormap.from_list(cmap_name, colors, N=100)
-        ax.imshow(blurred, interpolation='hamming', cmap=cm)
-        IMAGE_FILE = settings.MEDIA_ROOT+'/' + f'new_heatmap_{LABELS}.png'
-        roof_image = imread(settings.MEDIA_ROOT+'/'+'roof_transparent.png')
-        ax.imshow(roof_image, aspect=1)
-        plt.tight_layout()
-        plt.axis('off')
-        plt.savefig(IMAGE_FILE,progressive=True,bbox_inches='tight')
-        with open(IMAGE_FILE, "rb") as img_file:
-            img_data = base64.b64encode(img_file.read())
+            elif 'P' in row['Name']:
+                reading = sensors_data[str(row['ID'])]
+                reading = reading * -1 if reading < 0 else reading
+                loading = reading * row['load/strain']
+                color = colors[hardcode_color(row['Name'])]
+               
+                rectangle = {
+                    'x': row['X'],
+                    'y': row['Y'],
+                    'color': color.rgb,
+                    'width': row['Width'],
+                    'height': row['Height'],
+                    'reading': reading,
+                    'loading': loading}
+                rectangles.append(rectangle)
+        blurred = calculate_heatmap(circles,rectangles,LABELS="loading")
+        img_data = produce_image(blurred, LABELS="loading")
         
         return Response(img_data, status=status.HTTP_201_CREATED)

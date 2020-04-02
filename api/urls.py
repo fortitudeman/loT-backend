@@ -3,5 +3,7 @@ from .views import *
 
 urlpatterns = [
     path('upload/', FileUploadView.as_view()),
-    path('heatmap/',DrawHeatmapView.as_view()),
+    path('capacity-heatmap/',CapacityHeatmapView.as_view()),
+    path('load-heatmap/',LoadHeatmapView.as_view()),
+    
 ]
