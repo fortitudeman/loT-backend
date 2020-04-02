@@ -23,7 +23,7 @@ LABELS = 'capacity_load'
 DATA_FILE = ''
 SENSOR_COORDINATES_DATA = 'media/sensor_coordinates.csv'
 IGNORE_DATA_BEFORE_ROW = 4871
-PLOT_TIMESTAMP = '2020-03-10 14:55:58'
+
 SOURCE_IMAGE_WIDTH = 1000
 SOURCE_IMAGE_HEIGHT = 680
 
@@ -60,6 +60,12 @@ def hardcode_color(sensor_name):
         'P04':95}
     return names_map[sensor_name]
 
+def index_containing_substring(the_list, substring):
+    for i, s in enumerate(the_list):
+        if substring in s:
+              return s
+    return -1
+
 
 class FileUploadView(APIView):
     parser_class = (FileUploadParser,)
@@ -73,7 +79,7 @@ class FileUploadView(APIView):
       df.replace(to_replace=0, method='ffill', inplace=True)
       latest_time = list(df.index)[-1]  
       latest_time = latest_time.replace(second=0,microsecond=0)
-      latest_time = latest_time.strftime('%Y-%m-%d %H:%M')
+      latest_time = latest_time.strftime('%Y-%m-%d')
       
       
       file_serializer = FileSerializer(data=request.data)
@@ -95,15 +101,26 @@ class DrawHeatmapView(APIView):
       
       def post(self, request, *args, **kwargs):
           
+       
         # Load the sensor reading data.
         df = pd.read_csv(DATA_FILE, header=None)
         df = df.iloc[IGNORE_DATA_BEFORE_ROW:]
         df.set_index(pd.to_datetime(df[0], unit='ms'), inplace=True)
         df.replace(to_replace=0, method='ffill', inplace=True)
 
+        DAY = request.data['date']
+        time_list = list(map(str,list(df.index)))
+        print(DAY)
+        str_index = index_containing_substring(time_list,DAY)
+        
+        PLOT_TIMESTAMP = str_index.split('.')[0]
         # Load the sensor placement data.
         df_sensors = pd.read_csv(SENSOR_COORDINATES_DATA)
-
+        
+        
+        #Get the timestamp of a certain day
+      
+        
         # Limit the data to specific timestamp.
         df_slice = df[PLOT_TIMESTAMP]
         df_slice = df_slice.to_dict('split')['data'][0]
@@ -123,8 +140,7 @@ class DrawHeatmapView(APIView):
                 reading = reading * -1 if reading < 0 else reading
                 capacity_percent = (reading / row['Capacity'])*100
                 color = colors[hardcode_color(row['Name'])]
-                # Uncomment this line when using real data.
-                #color = colors[round(capacity_percent)]
+                
                 circle = {
                     'x': row['X'],
                     'y': row['Y'],
@@ -139,8 +155,7 @@ class DrawHeatmapView(APIView):
                 reading = reading * -1 if reading < 0 else reading
                 capacity_percent = (reading / row['Capacity'])*100
                 color = colors[hardcode_color(row['Name'])]
-                # Uncomment this line when using real data.
-                #color = colors[round(capacity_percent)]
+                
                 rectangle = {
                     'x': row['X'],
                     'y': row['Y'],
@@ -177,10 +192,11 @@ class DrawHeatmapView(APIView):
         cm = LinearSegmentedColormap.from_list(cmap_name, colors, N=100)
         ax.imshow(blurred, interpolation='hamming', cmap=cm)
         IMAGE_FILE = settings.MEDIA_ROOT+'/' + f'new_heatmap_{LABELS}.png'
+        roof_image = imread(settings.MEDIA_ROOT+'/'+'roof_transparent.png')
+        ax.imshow(roof_image, aspect=1)
         plt.tight_layout()
         plt.axis('off')
-        plt.savefig(IMAGE_FILE)
-        
+        plt.savefig(IMAGE_FILE,progressive=True,bbox_inches='tight')
         with open(IMAGE_FILE, "rb") as img_file:
             img_data = base64.b64encode(img_file.read())
         
