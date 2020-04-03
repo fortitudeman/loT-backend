@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from scipy.ndimage.filters import gaussian_filter
 from matplotlib.colors import LinearSegmentedColormap
 import base64
-
+import matplotlib.patches as patches
 
 MAGIC = 0.1156069364
 
@@ -104,7 +104,50 @@ def calculate_heatmap(circles,rectangles,LABELS):
 
     return blurred
 
-def produce_image(blurred,LABELS):
+def add_circles(circles,ax,LABELS):
+    ax.scatter(
+    x=[c['x'] for c in circles],
+    y=[c['y'] for c in circles],
+    c=[c['color'] for c in circles],
+    s=[10],
+    zorder=2)
+
+    for index, circle in enumerate(circles):
+        offset_y = -15 if index % 2 else 15
+        label_x = circle['x']
+        label_y = (circle['y'] + 6) + offset_y
+        if LABELS == 'loading':
+            text = circle['Name'] + ": "+'{}lbs'.format(round(circle['loading']))
+        elif LABELS == 'capacity_load':
+            text = circle['Name'] + ": "+'{}%'.format(round(circle['capacity_load']))
+
+        ax.text(label_x, label_y, text, color='white', fontsize=9, fontweight=1000)
+        ax.text(label_x, label_y, text, fontsize=9, fontweight=600)
+
+def add_rectangles(rectangles,ax,LABELS,sensors_data):
+    # Add rectangles.
+    for rectangle in rectangles:
+        sensor_reading = sensors_data
+        rectangle_x = rectangle['x']
+        rectangle_y = rectangle['y']
+        label_x = rectangle['x'] - 5
+        label_y = rectangle['y'] + 6
+        rect = patches.Rectangle(
+            xy=(rectangle_x, rectangle_y),
+            width=rectangle['height'],
+            height=rectangle['height'],
+            edgecolor='none',
+            zorder=1,
+            facecolor=rectangle['color'])
+        ax.add_patch(rect)
+        if LABELS == 'loading':
+            text = rectangle['Name']+ ": " +'{}lbs'.format(round(rectangle['loading']))
+        elif LABELS == 'capacity_load':
+            text = rectangle['Name']+ ": " +'{}%'.format(round(rectangle['capacity_load']))
+        ax.text(label_x, label_y, text, fontsize=9, fontweight=600)
+
+    
+def produce_image(blurred,circles,rectangles,LABELS,sensors_data):
     fig, ax = plt.subplots(figsize=(10, 10))
 
     # Create custom colormap.
@@ -118,6 +161,8 @@ def produce_image(blurred,LABELS):
     ax.imshow(blurred, interpolation='hamming', cmap=cm)
     IMAGE_FILE = settings.MEDIA_ROOT+'/' + f'new_heatmap_{LABELS}.png'
     roof_image = imread(settings.MEDIA_ROOT+'/'+'roof_transparent.png')
+    add_circles(circles,ax,LABELS)
+    add_rectangles(rectangles,ax,LABELS,sensors_data)
     ax.imshow(roof_image, aspect=1)
     plt.tight_layout()
     plt.axis('off')
@@ -174,11 +219,12 @@ class CapacityHeatmapView(APIView):
                 color = colors[hardcode_color(row['Name'])]
                 
                 circle = {
-                    'x': row['X'],
-                    'y': row['Y'],
+                    'x': row['X']-70,
+                    'y': row['Y']-70,
                     'color': color.rgb,
                     'size': row['Width'],
                     'reading': reading,
+                    'Name':row['Name'],
                     'capacity_load': capacity_percent}
                 circles.append(circle)
 
@@ -189,16 +235,18 @@ class CapacityHeatmapView(APIView):
                 color = colors[hardcode_color(row['Name'])]
                 
                 rectangle = {
-                    'x': row['X'],
-                    'y': row['Y'],
+                    'x': row['X']-70,
+                    'y': row['Y']-70,
                     'color': color.rgb,
                     'width': row['Width'],
                     'height': row['Height'],
                     'reading': reading,
+                    'Name':row['Name'],
                     'capacity_load': capacity_percent}
                 rectangles.append(rectangle)
-        blurred = calculate_heatmap(circles,rectangles,LABELS="capacity_load")
-        img_data = produce_image(blurred, LABELS="capacity_load")
+       
+        blurred = calculate_heatmap(circles,rectangles,"capacity_load")
+        img_data = produce_image(blurred,circles,rectangles, "capacity_load",sensors_data)
         
         return Response(img_data, status=status.HTTP_201_CREATED)
 
@@ -236,11 +284,12 @@ class LoadHeatmapView(APIView):
                 color = colors[hardcode_color(row['Name'])]
               
                 circle = {
-                    'x': row['X'],
-                    'y': row['Y'],
+                    'x': row['X']-70,
+                    'y': row['Y']-70,
                     'color': color.rgb,
                     'size': row['Width'],
                     'reading': reading,
+                    'Name':row['Name'],
                     'loading': loading}
                 circles.append(circle)
 
@@ -251,15 +300,16 @@ class LoadHeatmapView(APIView):
                 color = colors[hardcode_color(row['Name'])]
                
                 rectangle = {
-                    'x': row['X'],
-                    'y': row['Y'],
+                    'x': row['X']-70,
+                    'y': row['Y']-70,
                     'color': color.rgb,
                     'width': row['Width'],
                     'height': row['Height'],
+                    'Name':row['Name'],
                     'reading': reading,
                     'loading': loading}
                 rectangles.append(rectangle)
-        blurred = calculate_heatmap(circles,rectangles,LABELS="loading")
-        img_data = produce_image(blurred, LABELS="loading")
+        blurred = calculate_heatmap(circles,rectangles,"loading")
+        img_data = produce_image(blurred,circles,rectangles,"loading",sensors_data)
         
         return Response(img_data, status=status.HTTP_201_CREATED)
