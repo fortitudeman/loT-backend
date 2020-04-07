@@ -313,3 +313,79 @@ class LoadHeatmapView(APIView):
         img_data = produce_image(blurred,circles,rectangles,"loading",sensors_data)
         
         return Response(img_data, status=status.HTTP_201_CREATED)
+    
+def all_data_list(df,df_offset,df_max,the_list,substring,sensors):
+        data_list = []
+        for i, s in enumerate(the_list):
+            if substring in s:
+                  data_list.append(s.split('.')[0])
+        max_sensors_data = {}
+        df_day = pd.DataFrame()
+        for day in data_list:
+            PLOT_TIMESTAMP = day
+            df_day = pd.concat([df_day, df[PLOT_TIMESTAMP]], ignore_index=True)
+        for i in range(1, len(df_day.columns), 3):
+                max_sensors_data[str(df_day.iloc[1,i])] = (df_day.iloc[:,i+1].max() - df_offset[i+1]) * MAGIC
+        max_load_at_day = []
+        for index, row in df_max.iterrows():
+            max_sensor_value = {}
+            reading = abs(max_sensors_data[str(row['ID'])])
+            max_load = row['load/strain']*reading
+            sensor = row['Name']
+            if sensor in sensors:
+                max_sensor_value = {
+                    sensor:max_load
+                }
+                max_load_at_day.append(max_sensor_value)
+        return max_load_at_day
+
+def get_max_data(DAYs,sensors,time_list,df,df_offset,df_max):
+    data_at_days = []
+    
+    for DAY in DAYs:
+        data_at_day = {}
+        data_list = all_data_list(df,df_offset,df_max,time_list,DAY,sensors)
+        data_at_day = {
+            DAY:data_list
+        }
+        data_at_days.append(data_at_day)
+    return data_at_days
+           
+class LoadChronologyView(APIView):
+    
+    def post(self, request, *args, **kwargs):
+        # Load the sensor reading data.
+        df = pd.read_csv(DATA_FILE, header=None)
+        df.set_index(pd.to_datetime(df[0], unit='ms'), inplace=True)
+        
+        # Load the sensor placement data.
+        df_sensors = pd.read_csv(SENSOR_COORDINATES_DATA)
+        df_offset = df.head(1)
+        df_offset = df_offset.to_dict('split')['data'][0]
+        
+        #Load strain to load data
+        df_load = pd.read_csv(STRAIN_TO_LOAD_DATA,header=None)
+        df_load = df_load.T
+        df_load.columns = df_load.iloc[0]
+        df_newload = df_load[1:]
+        weights = pd.to_numeric(df_newload.iloc[:,2],errors='coerce')
+        strains = pd.to_numeric(df_newload.iloc[:,1],errors='coerce')
+        df_newload['load/strain'] = weights/strains
+        df_merge = pd.merge(left=df_sensors, right=df_newload,left_on='Name', right_on='Sensor')
+        df_max = df_merge[['ID','Name','load/strain']]
+        
+        time_list = list(map(str,list(df.index)))
+        DAYs = request.data['last_week']
+        sensors = request.data['sensors']
+        data = get_max_data(DAYs,sensors,time_list,df,df_offset,df_max)
+        
+        
+        updated = []
+        for day_data in data:
+            renewed_day = {
+                'name':list(day_data.keys())[0]
+            }
+            for item in list(day_data.values())[0]:
+                renewed_day.update(item)
+            updated.append(renewed_day)
+        return Response(updated)
