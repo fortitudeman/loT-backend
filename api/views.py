@@ -172,33 +172,82 @@ def produce_image(blurred,circles,rectangles,LABELS,sensors_data):
         
     return img_data
 
+def all_day_list(the_list,substring):
+    data_list = []
+    for i, s in enumerate(the_list):
+        if substring in s:
+              data_list.append(s.split('.')[0])
+    return data_list
+
+
 class FileUploadView(APIView):
     parser_class = (FileUploadParser,)
 
     def post(self, request, *args, **kwargs):
       
-      #--------Get the latest time from the timestamp--------#  
-      file = request.data['file']
-      df = pd.read_csv(file, header=None)
-      df.set_index(pd.to_datetime(df[0], unit='ms'), inplace=True)
-      df.replace(to_replace=0, method='ffill', inplace=True)
-      latest_time = list(df.index)[-1]  
-      latest_time = latest_time.replace(second=0,microsecond=0)
-      latest_time = latest_time.strftime('%Y-%m-%d')
-      
-      
-      file_serializer = FileSerializer(data=request.data)
-      #--------Get the file path in the server--------------#
-      global DATA_FILE
-      k = request.data['file'].name
-      DATA_FILE = settings.MEDIA_ROOT +'/' + k
-      
-      if file_serializer.is_valid():
-          file = file_serializer.save()
-
-          return Response(latest_time, status=status.HTTP_201_CREATED)
-      else:
-          return Response("Failed to Upload", status=status.HTTP_400_BAD_REQUEST)
+        #--------Get the latest time from the timestamp--------#  
+        file = request.data['file']
+        df = pd.read_csv(file, header=None)
+        df.set_index(pd.to_datetime(df[0], unit='ms'), inplace=True)
+        df.replace(to_replace=0, method='ffill', inplace=True)
+        latest_time = list(df.index)[-1]  
+        latest_time = latest_time.replace(second=0,microsecond=0)
+        latest_time = latest_time.strftime('%Y-%m-%d')
+        
+        
+        file_serializer = FileSerializer(data=request.data)
+        #--------Get the file path in the server--------------#
+        global DATA_FILE
+        k = request.data['file'].name
+        DATA_FILE = settings.MEDIA_ROOT +'/' + k
+        
+        
+        #--------Get the maxim data of the latest day among the sensors---------#
+        
+        # Load the sensor placement data.
+        df_sensors = pd.read_csv(SENSOR_COORDINATES_DATA)
+        df_offset = df.head(1)
+        df_offset = df_offset.to_dict('split')['data'][0]
+        
+        #Load strain to load data
+        df_load = pd.read_csv(STRAIN_TO_LOAD_DATA,header=None)
+        df_load = df_load.T
+        df_load.columns = df_load.iloc[0]
+        df_newload = df_load[1:]
+        weights = pd.to_numeric(df_newload.iloc[:,2],errors='coerce')
+        strains = pd.to_numeric(df_newload.iloc[:,1],errors='coerce')
+        df_newload['load/strain'] = weights/strains
+        df_merge = pd.merge(left=df_sensors, right=df_newload,left_on='Name', right_on='Sensor')
+        df_max = df_merge[['ID','Name','load/strain']]
+        
+        time_list = list(map(str,list(df.index)))
+        DAY = latest_time
+        data_list = all_day_list(time_list,DAY)
+        
+        max_sensors_data = {}
+        df_day = pd.DataFrame()
+        for day in data_list:
+                PLOT_TIMESTAMP = day
+                df_day = pd.concat([df_day, df[PLOT_TIMESTAMP]], ignore_index=True)
+        for i in range(1, len(df_day.columns), 3):
+                max_sensors_data[str(df_day.iloc[1,i])] = (df_day.iloc[:,i+1].max() - df_offset[i+1]) * MAGIC
+        max_load_at_day = []
+        for index, row in df_max.iterrows():
+                reading = abs(max_sensors_data[str(row['ID'])])
+                max_load = row['load/strain']*reading
+                sensor = row['Name']
+                max_load_at_day.append(max_load)
+        
+        max_load = max(max_load_at_day)      
+        res_data = []
+        res_data.append(latest_time)
+        res_data.append(round(max_load))
+        
+        if file_serializer.is_valid():
+            file = file_serializer.save()
+            return Response(res_data, status=status.HTTP_200_OK)
+        else:
+            return Response("Failed to Upload", status=status.HTTP_204_NO_CONTENT)
 
 
 class CapacityHeatmapView(APIView):
@@ -248,7 +297,7 @@ class CapacityHeatmapView(APIView):
         blurred = calculate_heatmap(circles,rectangles,"capacity_load")
         img_data = produce_image(blurred,circles,rectangles, "capacity_load",sensors_data)
         
-        return Response(img_data, status=status.HTTP_201_CREATED)
+        return Response(img_data, status=status.HTTP_200_OK)
 
 class LoadHeatmapView(APIView):
     
@@ -312,7 +361,7 @@ class LoadHeatmapView(APIView):
         blurred = calculate_heatmap(circles,rectangles,"loading")
         img_data = produce_image(blurred,circles,rectangles,"loading",sensors_data)
         
-        return Response(img_data, status=status.HTTP_201_CREATED)
+        return Response(img_data, status=status.HTTP_200_OK)
     
 def all_data_list(df,df_offset,df_max,the_list,substring,sensors):
         data_list = []
@@ -330,7 +379,7 @@ def all_data_list(df,df_offset,df_max,the_list,substring,sensors):
         for index, row in df_max.iterrows():
             max_sensor_value = {}
             reading = abs(max_sensors_data[str(row['ID'])])
-            max_load = row['load/strain']*reading
+            max_load = round(row['load/strain']*reading)
             sensor = row['Name']
             if sensor in sensors:
                 max_sensor_value = {
